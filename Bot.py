@@ -1,6 +1,10 @@
 import os
 import re
 import sys
+from datetime import datetime
+from pytz import timezone
+
+from parsedatetime import parsedatetime
 
 from tweepy import StreamListener, Stream, OAuthHandler, API
 
@@ -15,7 +19,7 @@ class Bot:
 		self.api_secret_key = util.api_secret_key
 		self.access_token = util.access_token
 		self.access_token_secret = util.access_token_secret
-		self.tracked_word = ['samiambot']
+		self.tracked_word = ['@samiambot']
 		self.auth = OAuthHandler(self.api_key, self.api_secret_key)
 		self.auth.set_access_token(self.access_token, self.access_token_secret)
 		self.api = API(self.auth, wait_on_rate_limit=True, wait_on_rate_limit_notify=True)
@@ -46,45 +50,88 @@ class Streamer(StreamListener):
 		self.logger = Logger()
 		self.api = api
 		self.tracked_word = tracked_word
+		self.is_reminder_attempt = False
 
 	def on_status(self, status):
+		reply_status = self.api.get_status(status.id)
+		print(self.tracked_word)
+		print(reply_status)
+		print(reply_status.text)
 		# Check if @samiambot was mentioned. I.E, bot will not respond to just "samiambot" but "@samiambot"
-		if status.entities['user_mentions']['screen_name'] == self.tracked_word:
-			original_tweet_id = self.parse_reply(status)
+		if self.tracked_word in reply_status.text:
+			print('found @samiambot mention')
+			original_tweet_id = self.parse_reply(status, video=True)
+			# If tweet is a reply
 			if original_tweet_id is not None:
-				media = self.get_media(original_tweet_id)
-				if media is not None:
-					pass
+				tweet_media_link = self.get_media_url(original_tweet_id)
+				# If there's a video
+				if tweet_media_link is not None:
+					# Reply with video link
+					self.api.update_status(f'Here\'s your video link!\n{tweet_media_link}', in_reply_to_status_id=reply_status.id)
+					self.logger.log('Replied with link\n')
+					print('Replied with link')
+				# Simply do nothing if there's no video (for now)
+				else:
+					return
+			# Simply do nothing if tweet is not a reply (will always hold true as bot should only work for comments/replies)
 			else:
 				return
+
+		# If the mention of our bot contains any extra text rather than simply "@samiambot".
+		else:
+			print(f'tracked word: {self.tracked_word}')
+			print(f'word found: {reply_status.text}')
+			# Parse reply to determine that it's in fact a reminder request
+			original_tweet_id = self.parse_reply(status, reminder=True)
+			# If we successfully parse and get our desired word (!RemindMe) and a time (eg. 1 hour)
+			if original_tweet_id is not None:
+				reminder_time = self.set_schedule_job(original_tweet_id)
+			else:
+				# Check if it's an attempt for a reminder and send a reply
+				if self.is_reminder_attempt:
+					self.api.update_status(in_reply_to_status_id=status.id,
+					                       status=f'No time found. Please use either  (Case insenitive) !Remindme, '
+					                              f'RemindMe!, or remindme followed by a time\nExample: !RemindMe in 5 hours')
+					return
 
 	def parse_reply(self, reply, video=False, reminder=False):
 		# Check if it's a retweet
 		if hasattr(reply, 'retweeted_status'):
 			return
 		else:
-			try:
-				# Search for our desired words case insensitive
-				word_to_match = re.search(r'(?i)(!*)RemindMe(!*)', reply)
-				# Get everything before our desired match
-				tweet_string = reply[word_to_match.start():]
-				self.logger.log("Found reply with just @samiambot")
-				# Remove characters that break our format
-				tweet_string = tweet_string.split('\n')[0]
-				if tweet_string.count('"') == 1:
-					tweet_string = tweet_string + '"'
+			# If we need to parse a reminder
+			if reminder:
+				try:
+					# Search for our desired words case insensitive
+					word_to_match = re.search(r'(?i)(!*)RemindMe(!*)', reply)
+					# Get everything before our desired match
+					tweet_string = reply[word_to_match.start():]
+					self.logger.log("Found reply with just @samiambot")
+					# Remove characters that break our format
+					tweet_string = tweet_string.split('\n')[0]
+					if tweet_string.count('"') == 1:
+						tweet_string = tweet_string + '"'
 
-				# Fix dashing for datetime parsing
-				tweet_string = tweet_string.replace('-', '/')
-				# Get Remind Me message
-				reminder_time = re.sub('(["].{0,9000}["])', '', tweet_string)[9:]
+					# Fix dashing for datetime parsing
+					tweet_string = tweet_string.replace('-', '/')
+					# Get Remind Me message
+					reminder_time = re.sub('(["].{0,9000}["])', '', tweet_string)[9:]
 
-				if reminder_time is not None:
-					self.logger.log("No time found\n")
-					return  # Return something here
-			# We get this error when we hit tweet_string = reply[match.start():] which means there are not words we need
-			# (remindme, !RemindMe, RemindMe!, remindme!, etc) so we can go ahead and check if its a reply and process
-			except AttributeError:
+					# Check that there's a time format that we want. Eg (5 days, 20 hours, August 25th)
+					if reminder_time is not None:
+						self.logger.log("No time found for reminder attempt\n")
+						return reminder_time
+					# Return None if we dont have a time but we have the desired words so we can reply to user with
+					# the correct reminder format
+					else:
+						# Here, we want to see if it's an attempt for a reminder and reply with  the appropriate reminder format
+						self.is_reminder_attempt = True
+						return
+				# We get this error when we hit tweet_string = reply[match.start():] which means there are not words we need
+				# (remindme, !RemindMe, RemindMe!, remindme!, etc) so we can go ahead and return None
+				except AttributeError:
+					return
+			elif video:
 				# Get original tweet's ID for processing
 				original_tweet_id = reply.in_reply_to_status_id_str
 				# Check to see if tweet is a reply. We want a reply under a video (which we'll check for later)
@@ -98,21 +145,43 @@ class Streamer(StreamListener):
 					self.logger.log("No media found\n")
 					return
 
-	# Function for downloading media
-	def get_media(self, extended_tweet_id):
+	# Function for getting media url
+	def get_media_url(self, extended_tweet_id):
 		self.logger.log("Downloading media")
 		original_tweet_object = self.api.get_status(extended_tweet_id)
 		media_url = None
-		video_variants = original_tweet_object.extended_entities['media'][0]['video_info']['variants']
+		try:
+			video_variants = original_tweet_object.extended_entities['media'][0]['video_info']['variants']
+		except AttributeError:
+			return
 
 		for variant in video_variants:
 			if variant['content_type'] == 'video/mp4':
 				media_url = variant['url']
 
 		# wget.download(media_url, os.path.join(sys.path[0], 'media'))
-		self.logger.log("Media link obtained\n")
-		print("Media link obtained\n")
+		self.logger.log("Media link obtained")
+		print("Media link obtained")
 		return media_url
+
+	def set_schedule_job(self, time):
+		calendar = parsedatetime.Calendar()
+		reply_tweet = None
+		reply_date = None
+
+		try:
+			schedule_time = calendar.parse(time, datetime.now(timezone('ET')))
+		except (ValueError, OverflowError):  # year is too long
+			schedule_time = calendar.parse('9999-12-31')
+		if schedule_time[0] == 0:
+			schedule_time.parse('1 day', datetime.now(timezone('ET')))
+			reply_tweet = '0 was inserted for your time. Defaulted to 1 hour!\n\n'
+
+		# Convert time
+		reply_date = time.strftime('%Y-%m-%d %H:%M:%S', schedule_time[0])
+		reply_tweet += f'I\'ll be reminding you of this thread {time}'
+
+		return 1
 
 	def on_error(self, status_code):
 		if status_code == 420:
@@ -129,8 +198,9 @@ class Logger:
 		self.log_name = "log.txt"
 
 	def log(self, text):
-		# See if log exists in same folder and set appropriate file access mode
-		if os.path.exists(os.path.join(sys.path[0], 'log.txt')):
+		# See if log exists in same folder and set appropriate file access mode, Append to file if it exists and create
+		# new file if it doesn't exist
+		if os.path.exists(os.path.join(sys.path[0], self.log_name)):
 			mode = 'a'
 		else:
 			mode = 'w'
