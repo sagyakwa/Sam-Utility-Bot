@@ -23,27 +23,27 @@ class Bot:
 		self.auth = OAuthHandler(self.api_key, self.api_secret_key)
 		self.auth.set_access_token(self.access_token, self.access_token_secret)
 		self.api = API(self.auth, wait_on_rate_limit=True, wait_on_rate_limit_notify=True)
-		self.stream_listener = Streamer(api=self.api, tracked_word=self.tracked_word[0])
+		self.stream_listener = BotStreamer(api=self.api, tracked_word=self.tracked_word[0])
 		self.streaming = Stream(auth=self.api.auth, listener=self.stream_listener)
 		self.logger.log('Login successful\n')
 
 	# Function to start listening.
-	# returns a status object which gets passed to the on_status function in our Streamer subclass
+	# returns a status object which gets passed to the on_status function in our BotStreamer subclass
 	def listen(self, follow=util.user_to_follow):
 		self.logger.log('Listening...')
 		# set stream to follow only me and listen for my tweets
 		self.streaming.filter(follow=[follow], is_async=True, track=self.tracked_word)
 
-	# # Function for tweeting
-	# def tweet(self, tweet):
-	# 	self.api.update_status(status=tweet)
-	#
-	# # Function for replying
-	# def reply(self, status_id, reply):
-	# 	self.api.update_status(in_reply_to_status_id=status_id, status=reply)
+	# Function for tweeting
+	def tweet(self, tweet):
+		self.api.update_status(status=tweet)
+
+	# Function for replying
+	def reply(self, reply, status_id):
+		self.api.update_status(reply, in_reply_to_status_id=status_id, auto_populate_reply_metadata=True)
 
 
-class Streamer(StreamListener):
+class BotStreamer(StreamListener):
 	def __init__(self, api=None, tracked_word=None):
 		# Call StreamListener superclass and set out API to the already authenticated one from Bot()
 		super().__init__(api=api)
@@ -53,13 +53,9 @@ class Streamer(StreamListener):
 		self.is_reminder_attempt = False
 
 	def on_status(self, status):
-		reply_status = self.api.get_status(status.id)
-		print(self.tracked_word)
-		print(reply_status)
-		print(reply_status.text)
 		# Check if @samiambot was mentioned. I.E, bot will not respond to just "samiambot" but "@samiambot"
-		if self.tracked_word in reply_status.text:
-			print('found @samiambot mention')
+		if self.tracked_word in status.text:
+			self.logger.log('Found @samiambot mention')
 			original_tweet_id = self.parse_reply(status, video=True)
 			# If tweet is a reply
 			if original_tweet_id is not None:
@@ -67,9 +63,10 @@ class Streamer(StreamListener):
 				# If there's a video
 				if tweet_media_link is not None:
 					# Reply with video link
-					self.api.update_status(f'Here\'s your video link!\n{tweet_media_link}', in_reply_to_status_id=reply_status.id)
+					self.api.update_status(f'Here\'s your video link below!\n{tweet_media_link}', in_reply_to_status_id=status.id,
+					                       auto_populate_reply_metadata=True)  # auto populate needs to be set to true
+					# or a new tweet is made and not a reply
 					self.logger.log('Replied with link\n')
-					print('Replied with link')
 				# Simply do nothing if there's no video (for now)
 				else:
 					return
@@ -78,20 +75,18 @@ class Streamer(StreamListener):
 				return
 
 		# If the mention of our bot contains any extra text rather than simply "@samiambot".
-		else:
-			print(f'tracked word: {self.tracked_word}')
-			print(f'word found: {reply_status.text}')
+		elif 'remindme' in status.text:
 			# Parse reply to determine that it's in fact a reminder request
-			original_tweet_id = self.parse_reply(status, reminder=True)
+			original_tweet_id = self.parse_reply(status.text, reminder=True)
 			# If we successfully parse and get our desired word (!RemindMe) and a time (eg. 1 hour)
 			if original_tweet_id is not None:
 				reminder_time = self.set_schedule_job(original_tweet_id)
 			else:
 				# Check if it's an attempt for a reminder and send a reply
 				if self.is_reminder_attempt:
-					self.api.update_status(in_reply_to_status_id=status.id,
-					                       status=f'No time found. Please use either  (Case insenitive) !Remindme, '
-					                              f'RemindMe!, or remindme followed by a time\nExample: !RemindMe in 5 hours')
+					self.api.update_status(f'No time found. Please use either  (Case insenitive) !Remindme, RemindMe!, '
+					                       f'or remindme followed by a time\nExample: !RemindMe in 5 hours',
+					                       in_reply_to_status_id=status.id, auto_populate_reply_metadata=True)
 					return
 
 	def parse_reply(self, reply, video=False, reminder=False):
@@ -161,7 +156,6 @@ class Streamer(StreamListener):
 
 		# wget.download(media_url, os.path.join(sys.path[0], 'media'))
 		self.logger.log("Media link obtained")
-		print("Media link obtained")
 		return media_url
 
 	def set_schedule_job(self, time):
@@ -210,6 +204,7 @@ class Logger:
 			log_file.write(f'{text}\n')
 
 
-Bot().listen(follow=util.throw_away)
-# print(Processor().process_text("samiambot"))
-# Logger("Test")
+if __name__ == '__main__':
+	twitter_bot = Bot()
+	twitter_bot.listen(follow=util.throw_away)
+	# Logger("Test")
