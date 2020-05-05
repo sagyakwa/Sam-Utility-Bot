@@ -42,7 +42,7 @@ class Bot:
 		if follow is None:
 			follow = self.user_to_follow
 		self.logger.log('Listening...')
-		# set stream to follow only me and listen for my tweets
+		# Set stream to follow only me and listen for specific tweets
 		self.streaming.filter(follow=[follow], is_async=True, track=self.tracked_word)
 
 	# Function for tweeting
@@ -53,7 +53,7 @@ class Bot:
 		:rtype: None
 		:param tweet: String object to tweet
 		"""
-		self.api.update_status(status=tweet)
+		self.api.update_status(tweet)
 
 	# Function for replying
 	def reply(self, reply: object, status_id: object) -> None:
@@ -76,7 +76,7 @@ class BotStreamer(StreamListener):
 		self.tracked_word = tracked_word
 		self.is_reminder_attempt = False
 
-	def on_status(self, status: object) -> None:
+	def on_status(self, status: object):
 		"""
 		This function is activated whenever we find our tracked word (which is @samiambot)
 
@@ -85,43 +85,51 @@ class BotStreamer(StreamListener):
 		:return: None
 		"""
 		# Check if @samiambot was mentioned. I.E, bot will not respond to just "samiambot" but "@samiambot"
-		if self.tracked_word in status.text:
-			self.logger.log(f"[{datetime.now(tz=timezone('EST'))}]")
-			self.logger.log('Found @samiambot mention')
-			original_tweet_id = self.parse_reply(status, video=True)
-			# If tweet is a reply
-			if original_tweet_id is not None:
-				tweet_media_link = self.get_media_url(original_tweet_id)
-				# If there's a video
-				if tweet_media_link is not None:
-					# Reply with video link
-					self.api.update_status(f'Here\'s your video link below!\n{tweet_media_link}',
-					                       in_reply_to_status_id=status.id,
-					                       auto_populate_reply_metadata=True)  # auto populate needs to be set to true
-					# or a new tweet is made and not a reply
-					self.logger.log('Replied with link\n')
-				# Simply do nothing if there's no video (for now)
+		if self.tracked_word in status.text.lower():
+			if '/test/' not in status.text.lower():
+				self.logger.log(f"[{datetime.now(tz=timezone('EST'))}]")
+				self.logger.log('Found @samiambot mention')
+				original_tweet_id = self.parse_reply(status, video=True)
+				# If tweet is a reply
+				if original_tweet_id is not None:
+					tweet_media_link = self.get_media_url(original_tweet_id)
+					# If there's a video
+					if tweet_media_link is not None:
+						# Reply with video link
+						self.api.update_status(f'Here\'s your video link below!\n{tweet_media_link}',
+						                       in_reply_to_status_id=status.id,
+						                       auto_populate_reply_metadata=True)  # auto populate needs to be set to true
+						# or a new tweet is made and not a reply
+						self.logger.log('Replied with link\n')
+					# Simply do nothing if there's no video (for now)
+					else:
+						self.logger.log('Couldn\'t find extended entities')
+						return
+				# Simply do nothing if tweet is not a reply (will always hold true as bot should only work for comments/replies)
 				else:
-					self.logger.log('Couldn\'t find extended entities')
 					return
-			# Simply do nothing if tweet is not a reply (will always hold true as bot should only work for comments/replies)
-			else:
-				return
 
-		# If the mention of our bot contains any extra text rather than simply "@samiambot".
-		elif 'remindme' in status.text:
-			# Parse reply to determine that it's in fact a reminder request
-			original_tweet_id = self.parse_reply(status.text, reminder=True)
-			# If we successfully parse and get our desired word (!RemindMe) and a time (eg. 1 hour)
-			if original_tweet_id is not None:
-				reminder_time = self.set_schedule_job(original_tweet_id)
-			else:
-				# Check if it's an attempt for a reminder and send a reply
-				if self.is_reminder_attempt:
-					self.api.update_status(f'No time found. Please use either  (Case insenitive) !Remindme, RemindMe!, '
-					                       f'or remindme followed by a time\nExample: !RemindMe in 5 hours',
-					                       in_reply_to_status_id=status.id, auto_populate_reply_metadata=True)
-					return
+			# If the mention of our bot contains any extra text rather than simply "@samiambot".
+			elif 'remindme' in status.text.lower():
+				# Parse reply to determine that it's in fact a reminder request
+				original_tweet_id = self.parse_reply(status.text, reminder=True)
+				# If we successfully parse and get our desired word (!RemindMe) and a time (eg. 1 hour)
+				if original_tweet_id is not None:
+					reminder_time = self.set_schedule_job(original_tweet_id)
+				else:
+					# Check if it's an attempt for a reminder and send a reply
+					if self.is_reminder_attempt:
+						self.api.update_status(f'No time found. Please use either  (Case insenitive) !Remindme, RemindMe!, '
+						                       f'or remindme followed by a time\nExample: !RemindMe in 5 hours',
+						                       in_reply_to_status_id=status.id, auto_populate_reply_metadata=True)
+						self.logger.log('User failed reminder attempt. Correct format replied.\n')
+						return
+			# For testing purposes!
+			elif '/test/' in status.text.lower():
+				self.logger.log(f"[{datetime.now(tz=timezone('EST'))}]")
+				self.logger.log('Found Test Statement')
+				self.api.update_status('Hey!', in_reply_to_status_id=status.id, auto_populate_reply_metadata=True)
+				self.logger.log('Reply sent to test message\n')
 
 	def parse_reply(self, reply: object, video: object = False, reminder: object = False) -> object:
 		"""
@@ -222,7 +230,7 @@ class BotStreamer(StreamListener):
 
 		try:
 			schedule_time = calendar.parse(time, datetime.now(timezone('ET')))
-		except (ValueError, OverflowError):  # year is too long
+		except (ValueError, OverflowError):  # when year is too long
 			schedule_time = calendar.parse('9999-12-31')
 		if schedule_time[0] == 0:
 			schedule_time.parse('1 day', datetime.now(timezone('ET')))
