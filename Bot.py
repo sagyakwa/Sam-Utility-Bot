@@ -92,7 +92,7 @@ class BotStreamer(StreamListener):
 		# Check if @samiambot was mentioned. I.E, bot will not respond to just "samiambot" but "@samiambot"
 		# NOTE: For some reason, the follow parameter passed in the listen function doesn't follow one specific user.
 		# See here https://github.com/tweepy/tweepy/issues/981 ... I suspect it's because of @ mention
-		if self.tracked_word in status.text.lower() and status.user.id == self.follow:
+		if self.tracked_word in status.text.lower() and status.user.id_str == self.follow:
 			# Check that it's not a test message
 			if '/test/' not in status.text.lower():
 				self.logger.log(f"[{datetime.now(tz=timezone('EST'))}]")
