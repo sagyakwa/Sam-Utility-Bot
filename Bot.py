@@ -1,24 +1,27 @@
 import os
 import re
 import sys
+import configparser
 from datetime import datetime
+
 from pytz import timezone
 
 from parsedatetime import parsedatetime
 
 from tweepy import StreamListener, Stream, OAuthHandler, API
 
-import util
-
 
 class Bot:
 	def __init__(self):
 		self.logger = Logger()
 		self.logger.log('Logging in...')
-		self.api_key = util.api_key
-		self.api_secret_key = util.api_secret_key
-		self.access_token = util.access_token
-		self.access_token_secret = util.access_token_secret
+		self.config_parser = configparser.ConfigParser()
+		self.config_parser.read(os.path.join(sys.path[0], 'config.ini'))
+		self.api_key = self.config_parser.get('Keys', 'api_key')
+		self.api_secret_key = self.config_parser.get('Keys', 'api_secret_key')
+		self.access_token = self.config_parser.get('Keys', 'access_token')
+		self.access_token_secret = self.config_parser.get('Keys', 'access_token_secret')
+		self.user_to_follow = self.config_parser.get('UserInfo', 'user_to_follow')
 		self.tracked_word = ['@samiambot']
 		self.auth = OAuthHandler(self.api_key, self.api_secret_key)
 		self.auth.set_access_token(self.access_token, self.access_token_secret)
@@ -29,17 +32,38 @@ class Bot:
 
 	# Function to start listening.
 	# returns a status object which gets passed to the on_status function in our BotStreamer subclass
-	def listen(self, follow=util.user_to_follow):
+	def listen(self, follow: object = None) -> None:
+		"""
+		This function starts our BotStreamer subclass
+
+		:rtype: None
+		:param follow: ID of user to follow
+		"""
+		if follow is None:
+			follow = self.user_to_follow
 		self.logger.log('Listening...')
 		# set stream to follow only me and listen for my tweets
 		self.streaming.filter(follow=[follow], is_async=True, track=self.tracked_word)
 
 	# Function for tweeting
-	def tweet(self, tweet):
+	def tweet(self, tweet: object) -> None:
+		"""
+		In case we need to manually tweet for some reason in the future
+
+		:rtype: None
+		:param tweet: String object to tweet
+		"""
 		self.api.update_status(status=tweet)
 
 	# Function for replying
-	def reply(self, reply, status_id):
+	def reply(self, reply: object, status_id: object) -> None:
+		"""
+		In case we want to reply manually for some reason
+
+		:rtype: None
+		:param reply: String object to reply with
+		:param status_id:  Tweet ID to reply to
+		"""
 		self.api.update_status(reply, in_reply_to_status_id=status_id, auto_populate_reply_metadata=True)
 
 
@@ -52,9 +76,17 @@ class BotStreamer(StreamListener):
 		self.tracked_word = tracked_word
 		self.is_reminder_attempt = False
 
-	def on_status(self, status):
+	def on_status(self, status: object) -> None:
+		"""
+		This function is activated whenever we find our tracked word (which is @samiambot)
+
+		:rtype: None
+		:param status:
+		:return: None
+		"""
 		# Check if @samiambot was mentioned. I.E, bot will not respond to just "samiambot" but "@samiambot"
 		if self.tracked_word in status.text:
+			self.logger.log(f"[{datetime.now(tz=timezone('EST'))}]")
 			self.logger.log('Found @samiambot mention')
 			original_tweet_id = self.parse_reply(status, video=True)
 			# If tweet is a reply
@@ -63,12 +95,14 @@ class BotStreamer(StreamListener):
 				# If there's a video
 				if tweet_media_link is not None:
 					# Reply with video link
-					self.api.update_status(f'Here\'s your video link below!\n{tweet_media_link}', in_reply_to_status_id=status.id,
+					self.api.update_status(f'Here\'s your video link below!\n{tweet_media_link}',
+					                       in_reply_to_status_id=status.id,
 					                       auto_populate_reply_metadata=True)  # auto populate needs to be set to true
 					# or a new tweet is made and not a reply
 					self.logger.log('Replied with link\n')
 				# Simply do nothing if there's no video (for now)
 				else:
+					self.logger.log('Couldn\'t find extended entities')
 					return
 			# Simply do nothing if tweet is not a reply (will always hold true as bot should only work for comments/replies)
 			else:
@@ -89,7 +123,16 @@ class BotStreamer(StreamListener):
 					                       in_reply_to_status_id=status.id, auto_populate_reply_metadata=True)
 					return
 
-	def parse_reply(self, reply, video=False, reminder=False):
+	def parse_reply(self, reply: object, video: object = False, reminder: object = False) -> object:
+		"""
+		Function to parse our user's reply and perform the necessary operations based on bool values passed in
+
+		:rtype: object
+		:param reply: String object to parse
+		:param video: Boolean for if we should parse with knowledge that we want a video
+		:param reminder: Boolean for if we should parse and set a reminder
+		:return: Either a time for a reminder, A string object of the tweet to reply video link under, or None
+		"""
 		# Check if it's a retweet
 		if hasattr(reply, 'retweeted_status'):
 			return
@@ -141,7 +184,14 @@ class BotStreamer(StreamListener):
 					return
 
 	# Function for getting media url
-	def get_media_url(self, extended_tweet_id):
+	def get_media_url(self, extended_tweet_id: object) -> object:
+		"""
+		Function to get video url
+
+		:rtype: object
+		:param extended_tweet_id: String object of the original tweet that posted a video
+		:return: Media url or None
+		"""
 		self.logger.log("Downloading media")
 		original_tweet_object = self.api.get_status(extended_tweet_id)
 		media_url = None
@@ -158,7 +208,14 @@ class BotStreamer(StreamListener):
 		self.logger.log("Media link obtained")
 		return media_url
 
-	def set_schedule_job(self, time):
+	def set_schedule_job(self, time: object) -> object:
+		"""
+		Function to set a reminder
+
+		:rtype: object
+		:param time: String object of the time to schedule our reminder
+		:return: TODO: figure out return type
+		"""
 		calendar = parsedatetime.Calendar()
 		reply_tweet = None
 		reply_date = None
@@ -177,7 +234,14 @@ class BotStreamer(StreamListener):
 
 		return 1
 
-	def on_error(self, status_code):
+	def on_error(self, status_code: object) -> object:
+		"""
+		Overriding StreamListener's on_error function
+
+		:rtype: object
+		:param status_code: Integer object of whatever status code we get
+		:return: False for our errors
+		"""
 		if status_code == 420:
 			self.logger.log(f'Status {status_code}')
 			return False
@@ -191,7 +255,13 @@ class Logger:
 		# Set location for getting absolute path
 		self.log_name = "log.txt"
 
-	def log(self, text):
+	def log(self, text: object) -> None:
+		"""
+		For logging. A bit unnecessary but whatever
+
+		:rtype: None
+		:param text: String object to log
+		"""
 		# See if log exists in same folder and set appropriate file access mode, Append to file if it exists and create
 		# new file if it doesn't exist
 		if os.path.exists(os.path.join(sys.path[0], self.log_name)):
@@ -206,5 +276,4 @@ class Logger:
 
 if __name__ == '__main__':
 	twitter_bot = Bot()
-	twitter_bot.listen(follow=util.throw_away)
-	# Logger("Test")
+	twitter_bot.listen(follow='1257338837644255233')
