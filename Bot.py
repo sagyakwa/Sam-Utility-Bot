@@ -144,7 +144,7 @@ class BotStreamer(StreamListener):
 			elif '/test/' in status.text.lower():
 				self.logger.log(f"[{datetime.now(tz=timezone('EST'))}]")
 				self.logger.log('Found Test Statement')
-				self.api.update_status('Hello creator\nReady whenever, just let me know what video you want to download!', in_reply_to_status_id=status.id, auto_populate_reply_metadata=True)
+				self.api.update_status('Yurrr\nReady whenever, just let me know what video you want to download!', in_reply_to_status_id=status.id, auto_populate_reply_metadata=True)
 				self.logger.log('Reply sent to test message\n')
 
 	def parse_reply(self, reply: object, video: object = False, reminder: object = False) -> object:
