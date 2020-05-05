@@ -2,13 +2,16 @@ import os
 import re
 import sys
 import configparser
+import threading
+import queue
 from datetime import datetime
 
 from pytz import timezone
 
-from parsedatetime import parsedatetime
-
+import dateparser
 from tweepy import StreamListener, Stream, OAuthHandler, API
+
+import ReminderBot
 
 
 class Bot:
@@ -69,12 +72,13 @@ class Bot:
 
 class BotStreamer(StreamListener):
 	def __init__(self, api=None, tracked_word=None):
-		# Call StreamListener superclass and set out API to the already authenticated one from Bot()
+		# Call StreamListener superclass and set our API to the already authenticated one from Bot()
 		super().__init__(api=api)
 		self.logger = Logger()
 		self.api = api
 		self.tracked_word = tracked_word
 		self.is_reminder_attempt = False
+		self.time_travel_requested = False
 
 	def on_status(self, status: object):
 		"""
@@ -86,6 +90,7 @@ class BotStreamer(StreamListener):
 		"""
 		# Check if @samiambot was mentioned. I.E, bot will not respond to just "samiambot" but "@samiambot"
 		if self.tracked_word in status.text.lower():
+			# Check that it's not a test message
 			if '/test/' not in status.text.lower():
 				self.logger.log(f"[{datetime.now(tz=timezone('EST'))}]")
 				self.logger.log('Found @samiambot mention')
@@ -109,26 +114,34 @@ class BotStreamer(StreamListener):
 				else:
 					return
 
+			# TODO: Implement reminder class...someday
 			# If the mention of our bot contains any extra text rather than simply "@samiambot".
 			elif 'remindme' in status.text.lower():
 				# Parse reply to determine that it's in fact a reminder request
-				original_tweet_id = self.parse_reply(status.text, reminder=True)
+				date_time_object = self.parse_reply(status.text, reminder=True)
 				# If we successfully parse and get our desired word (!RemindMe) and a time (eg. 1 hour)
-				if original_tweet_id is not None:
-					reminder_time = self.set_schedule_job(original_tweet_id)
+				if date_time_object is not None:
+					# Schedule our reminder
+					reminder_bot = ReminderBot.Scheduler()
+					reminder_bot.schedule(status.id, date_time_object)
 				else:
-					# Check if it's an attempt for a reminder and send a reply
+					# Check if it's a failed attempt for a reminder and send a reply
 					if self.is_reminder_attempt:
 						self.api.update_status(f'No time found. Please use either  (Case insenitive) !Remindme, RemindMe!, '
-						                       f'or remindme followed by a time\nExample: !RemindMe in 5 hours',
-						                       in_reply_to_status_id=status.id, auto_populate_reply_metadata=True)
+						                       f'or remindme followed by a time\nExample: RemindMe in 5 hours (don\'t '
+						                       f'put anything else after the tweet) in_reply_to_status_id=status.id, '
+						                       f'auto_populate_reply_metadata=True)')
 						self.logger.log('User failed reminder attempt. Correct format replied.\n')
 						return
+					# Check if reminder time is in the past. We always want a future time
+					elif self.time_travel_requested:
+						self.api.update_status('Can\'t remind you in the future sir. We\'re just not there yet :/. '
+						                       'Please pick a valid time')
 			# For testing purposes!
 			elif '/test/' in status.text.lower():
 				self.logger.log(f"[{datetime.now(tz=timezone('EST'))}]")
 				self.logger.log('Found Test Statement')
-				self.api.update_status('Hey!', in_reply_to_status_id=status.id, auto_populate_reply_metadata=True)
+				self.api.update_status('Hello creator\nReady whenever, just let me know what video you want to download!', in_reply_to_status_id=status.id, auto_populate_reply_metadata=True)
 				self.logger.log('Reply sent to test message\n')
 
 	def parse_reply(self, reply: object, video: object = False, reminder: object = False) -> object:
@@ -139,7 +152,7 @@ class BotStreamer(StreamListener):
 		:param reply: String object to parse
 		:param video: Boolean for if we should parse with knowledge that we want a video
 		:param reminder: Boolean for if we should parse and set a reminder
-		:return: Either a time for a reminder, A string object of the tweet to reply video link under, or None
+		:return: Either a datetime object for a reminder, A string object of the tweet to reply video link under, or None
 		"""
 		# Check if it's a retweet
 		if hasattr(reply, 'retweeted_status'):
@@ -158,15 +171,21 @@ class BotStreamer(StreamListener):
 					if tweet_string.count('"') == 1:
 						tweet_string = tweet_string + '"'
 
-					# Fix dashing for datetime parsing
+					# Fix dashing for datetime format
 					tweet_string = tweet_string.replace('-', '/')
-					# Get Remind Me message
+					# Get Remind Me message time
 					reminder_time = re.sub('(["].{0,9000}["])', '', tweet_string)[9:]
 
-					# Check that there's a time format that we want. Eg (5 days, 20 hours, August 25th)
+					# Check that there's a time format that we want. Eg ("in 5 days" or "in 1 hour", "on August 5th, 2020")
 					if reminder_time is not None:
 						self.logger.log("No time found for reminder attempt\n")
-						return reminder_time
+						datetime_object = dateparser.parse(reminder_time)
+						# Can't remind in the past so we compare that time to now
+						if datetime_object < datetime.now():
+							self.time_travel_requested = True
+							return
+						else:
+							return dateparser.parse(reminder_time)  # which will look something like -> 2020-08-25 00:00:00
 					# Return None if we dont have a time but we have the desired words so we can reply to user with
 					# the correct reminder format
 					else:
@@ -216,32 +235,6 @@ class BotStreamer(StreamListener):
 		self.logger.log("Media link obtained")
 		return media_url
 
-	def set_schedule_job(self, time: object) -> object:
-		"""
-		Function to set a reminder
-
-		:rtype: object
-		:param time: String object of the time to schedule our reminder
-		:return: TODO: figure out return type
-		"""
-		calendar = parsedatetime.Calendar()
-		reply_tweet = None
-		reply_date = None
-
-		try:
-			schedule_time = calendar.parse(time, datetime.now(timezone('ET')))
-		except (ValueError, OverflowError):  # when year is too long
-			schedule_time = calendar.parse('9999-12-31')
-		if schedule_time[0] == 0:
-			schedule_time.parse('1 day', datetime.now(timezone('ET')))
-			reply_tweet = '0 was inserted for your time. Defaulted to 1 hour!\n\n'
-
-		# Convert time
-		reply_date = time.strftime('%Y-%m-%d %H:%M:%S', schedule_time[0])
-		reply_tweet += f'I\'ll be reminding you of this thread {time}'
-
-		return 1
-
 	def on_error(self, status_code: object) -> object:
 		"""
 		Overriding StreamListener's on_error function
@@ -284,4 +277,4 @@ class Logger:
 
 if __name__ == '__main__':
 	twitter_bot = Bot()
-	twitter_bot.listen(follow='1257338837644255233')
+	twitter_bot.listen()
