@@ -29,7 +29,7 @@ class Bot:
 		self.auth = OAuthHandler(self.api_key, self.api_secret_key)
 		self.auth.set_access_token(self.access_token, self.access_token_secret)
 		self.api = API(self.auth, wait_on_rate_limit=True, wait_on_rate_limit_notify=True)
-		self.stream_listener = BotStreamer(api=self.api, tracked_word=self.tracked_word[0])
+		self.stream_listener = BotStreamer(api=self.api, tracked_word=self.tracked_word[0], follow=self.user_to_follow)
 		self.streaming = Stream(auth=self.api.auth, listener=self.stream_listener)
 		self.logger.log('Login successful\n')
 
@@ -71,12 +71,13 @@ class Bot:
 
 
 class BotStreamer(StreamListener):
-	def __init__(self, api=None, tracked_word=None):
+	def __init__(self, api=None, tracked_word=None, follow=None):
 		# Call StreamListener superclass and set our API to the already authenticated one from Bot()
 		super().__init__(api=api)
 		self.logger = Logger()
 		self.api = api
 		self.tracked_word = tracked_word
+		self.follow = follow
 		self.is_reminder_attempt = False
 		self.time_travel_requested = False
 
@@ -89,7 +90,9 @@ class BotStreamer(StreamListener):
 		:return: None
 		"""
 		# Check if @samiambot was mentioned. I.E, bot will not respond to just "samiambot" but "@samiambot"
-		if self.tracked_word in status.text.lower():
+		# NOTE: For some reason, the follow parameter passed in the listen function doesn't follow one specific user.
+		# See here https://github.com/tweepy/tweepy/issues/981 ... I suspect it's because of @ mention
+		if self.tracked_word in status.text.lower() and status.user.id == self.follow:
 			# Check that it's not a test message
 			if '/test/' not in status.text.lower():
 				self.logger.log(f"[{datetime.now(tz=timezone('EST'))}]")
